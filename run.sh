@@ -8,4 +8,3 @@ else
     echo "run.sh --> Compile failed"
 
 fi
-
