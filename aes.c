@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-
-
+// for open
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>  // for filesize
 
 uint8_t rc[7][4] = {
                             {0x01,0x00,0x00,0x00},
@@ -51,6 +53,7 @@ const uint8_t rsbox[256] = {
     0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
     0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
     0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d };
+
 
 #define R_SIZE 4
 #define C_SIZE 4
@@ -241,11 +244,11 @@ void shift_rows(uint8_t* inArray){
     static uint8_t temp[BLOCK_SIZE];
     memcpy(temp,inArray,BLOCK_SIZE);
     // col-major
-    for (int r = 0; r < C_SIZE; r++) { // dont do first row!
+    for (int c = 0; c < R_SIZE; c++) { // dont do first row!
         // each col
-        for (int c = 0; c < R_SIZE; c++) {
+        for (int r = 0; r < C_SIZE; r++) {
             // push back by r, new pos is r forward!
-            int8_t new_pos = r +C_SIZE*( (4-r+c) % 4);
+            int8_t new_pos = r +C_SIZE*( (r+c) % 4);
             inArray[r + c*C_SIZE] = temp[new_pos];
         }
     }
@@ -276,23 +279,23 @@ that is done mod with 'prime' irreducible polynomial:
 */
 // mix-matrix
 uint8_t mix_matrix[4][4] = {
-    {0x02, 0x03, 0x01, 0x01}, // row 1
+    {0x02, 0x01, 0x01, 0x03}, // col 0
 
-    {0x01, 0x02, 0x03, 0x01}, // row 2
+    {0x03, 0x02, 0x01, 0x01}, // col 1
 
-    {0x01, 0x01, 0x02, 0x03}, // row 3
+    {0x01, 0x03, 0x02, 0x01}, // col 2
 
-    {0x03, 0x01, 0x01, 0x02} // row 4
+    {0x01, 0x01, 0x03, 0x02} // col 3
 };
 
 uint8_t r_mix_matrix[4][4] = {
-    {14,11,13,9}, // row 1
+    {14,9,13,11}, // cols
 
-    {9,14,11,13},
+    {11,14,9,13},
 
-    {13,9,14,11},
+    {13,11,14,9},
 
-    {11,13,9,14}
+    {9,13,11,14}
 };
 
 ///////////GF(2^8) mull!///////////
@@ -357,7 +360,7 @@ void mix_cols(uint8_t m1[4][4], uint8_t* m2,uint8_t* output) {
             uint8_t tempint = 0;
             for (int i = 0; i < 4; i++) {
                 // given row * collumn, xor
-                tempint ^= gf_mul(m1[r][i], m2[c*4 + i]);
+                tempint ^= gf_mul(m1[i][r], m2[c*4 + i]);
             }
             tempMat[c*4+r] = tempint;
         }
@@ -395,9 +398,9 @@ void r_shift_rows(uint8_t* inArray){
     static uint8_t temp[BLOCK_SIZE];
     memcpy(temp,inArray,BLOCK_SIZE);
     // col-major
-    for (int r = 0; r < C_SIZE; r++) { // dont do first row!
-        for (int c = 0; c < R_SIZE; c++) {
-            int8_t new_pos = r +C_SIZE*( (r+c) % 4);
+    for (int c = 0; c < R_SIZE; c++) { // dont do first row!
+        for (int r = 0; r < C_SIZE; r++) {
+            int8_t new_pos = r +C_SIZE*( (4-r+c) % 4);
             inArray[r + c*C_SIZE] = temp[new_pos];
         }
     }
@@ -430,9 +433,99 @@ void x_or_key(uint8_t full_key[60][4], uint8_t block[32],int round) {
     }
 }
 
+// for nonce
+void xor_nonce_ctr(uint8_t ctr,unsigned char nonce[16],uint8_t state[16]){
+    // add to beginning or end, doesnt matter, as long as changes!
+    ;
+}
+
+// print array
+void print_arr(uint8_t arr[16]) {
+    for(int i= 0; i <16; i++) {
+        printf("%02x",arr[i]);
+    }printf("\n");
+}
+
+void e_aes_round(uint8_t full_key[60][4],uint8_t block[16]) {
+    printf("Array Begin :"); print_arr(block);
+    x_or_key(full_key,block,0);
+    for (int round = 1; round < NUM_KEYS; round++){
+        printf("Round[%d].Start:",round); print_arr(block);
+        // sub bytes inp, output
+        sub_bytes(block);
+        printf("Round[%d].s_box:",round); print_arr(block);
+        // shift rows
+        shift_rows(block);
+        printf("Round[%d].s_row:",round); print_arr(block);
+        if (round != NUM_KEYS-1){
+            // mix cols
+            mix_cols(mix_matrix,block,block);
+            printf("Round[%d].m_col:",round); print_arr(block);
+        }
+        // add rd key at end
+        printf("Round[%d].Xor:",round); print_arr(block);
+        x_or_key(full_key,block,round);  
+
+        
+    }printf("\n\n\n");
+}
+
+void d_aes_round(uint8_t full_key[60][4],uint8_t block[16]) {
+    // reversed.
+    for (int round = NUM_KEYS-1; round >= 1; round--){
+        x_or_key(full_key,block,round); 
+        if (round != NUM_KEYS-1){
+            mix_cols(r_mix_matrix,block,block);
+        }
+        r_shift_rows(block);
+        r_sub_bytes(block);
+    }
+    // final xor at round zero
+    x_or_key(full_key,block,0); 
+}
+
 
 // take in amt of arguments and array of ptrs to chars (filename)
 int main(int argc, char* argv[]) {
+    // test-vectors
+    uint8_t key_tst[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    };
+
+    uint8_t plain_tst[16] = {
+        0x00, 0x11, 0x22, 0x33,
+        0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99, 0xaa, 0xbb,
+        0xcc, 0xdd, 0xee, 0xff
+    };
+
+    uint8_t cipher_tst[16] = {
+        0x8e, 0xa2, 0xb7, 0xca,
+        0x51, 0x67, 0x45, 0xbf,
+        0xea, 0xfc, 0x49, 0x90,
+        0x4b, 0x49, 0x60, 0x89
+    };
+
+    printf("\n***TEST\n");
+    uint8_t full_key_tst[60][4] = {{0}};
+    keyExpansion(key_tst,full_key_tst);
+    e_aes_round(full_key_tst,plain_tst);
+    for(int i = 0; i<16; i++){
+        printf("%02X",plain_tst[i]);
+    }
+
+    // decrypt
+    d_aes_round(full_key_tst,plain_tst);
+    printf("\n");
+    for(int i = 0; i<16; i++){
+        printf("%02X",plain_tst[i]);
+    }
+    printf("\n***END TEST\n\n");
+    return 0;
+
 
 
     // getting keys
@@ -440,83 +533,63 @@ int main(int argc, char* argv[]) {
     get_key(key);
     uint8_t full_key[60][4] = {{0}};
     keyExpansion(key,full_key);
-    printf("\n\n<KEYS>\n\n");
-    for(int k = 0; k< 15; k++) {
-        printf("\n***KEY %d***\n",k);
-        for(int r = 0; r<4; r++) {
-            for(int c = 0; c<4;c++){
-                printf("%02X ",full_key[k*4+c][r]);
-            }printf("\n");
-        }
-    }
-    printf("\n\n</KEYS>\n\n");
- 
+
+    // CTR nonce to add to values!
+    unsigned char nonce[16] = "!@292jfkla3$v!6&";
+    
     // reading/writing in binary-mode
-    FILE *input_file, *output_file;
-    char filename[100];
-    sprintf(filename,"data/%s",argv[1]);
-    input_file = fopen(filename,"rb");
-    sprintf(filename,"data/%s",argv[2]);
-    output_file = fopen(filename,"wb");
+    int input_file = open(argv[1],O_RDONLY);
+    int output_file = open(argv[2], O_WRONLY | O_TRUNC | O_CREAT,0644);
 
     // opening blocks, reading/writing
-    uint8_t bytes_read;
-    while ( (bytes_read = fread(block,1,BLOCK_SIZE,input_file)) > 0) {
+    int8_t bytes_read;
+    long ctr = 0;
+
+    while ( (bytes_read = read(input_file,block,BLOCK_SIZE)) > 0) {
+        ctr++; // add 1 to counter, wraps-around
         if (bytes_read != BLOCK_SIZE) {
-            addPadding(block,bytes_read,BLOCK_SIZE);
-            printf("UNDER!\n");
+            if (strcmp(argv[3], "-e") == 0){
+                addPadding(block,bytes_read,BLOCK_SIZE);
+            }
             for(int i = 0; i<16; i++){
                 printf("%02X ",block[i]);
-            }printf("\n");
-            break; // breaking from loop!
+            }printf(" Bytes Read:%d\n",bytes_read);
 
         }
         // encrypt mode
         if (strcmp(argv[3], "-e") == 0){
-            for (int round = 0; round < NUM_KEYS; round++){
-                // x_or 
-                x_or_key(full_key,block,round);  
-                // sub bytes inp, output
-                sub_bytes(block);
-                // shift rows
-                shift_rows(block);
-                // mix cols
-                mix_cols(mix_matrix,block,block);
-            }
+            e_aes_round(full_key,block);
 
         } 
         // decrypt mode
         else if (strcmp(argv[3],"-d") == 0){
-            for (int round = NUM_KEYS-1; round >= 0; round--){
-                // reversed.
-                mix_cols(r_mix_matrix,block,block);
-                r_shift_rows(block);
-                r_sub_bytes(block);
-                x_or_key(full_key,block,round); 
-                
-            }
+            d_aes_round(full_key,block);
         }
 
 
         
         // writing  to file
-        fwrite(block,1,BLOCK_SIZE,output_file);
-
+        write(output_file,block,BLOCK_SIZE);
 
     }
     
-
-    
-    // final write --> ignore padding!
     // still operates as if padding was there though
-    fwrite(block,1,bytes_read,output_file);
-    fclose(input_file);
-    fclose(output_file);
+    close(input_file);
+    // leave last off for output
+    close(output_file);
     return 0;
 }
 
-// ./run.sh students.csv encrypted.txt -e
-// ./run.sh encrypted.txt decrypted.txt -d
+// ./run.sh data/tmp.csv data/encrypted.txt -e
+// ./run.sh data/encrypted.txt data/decrypted.txt -d
 
 // 123password--123!@#!@
 
+
+/*
+Test-Vector (256):
+    key=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    plain=00112233445566778899aabbccddeeff
+    cipher=8ea2b7ca516745bfeafc49904b496089
+Working :)
+*/

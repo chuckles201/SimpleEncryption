@@ -1,12 +1,14 @@
 #!/bin/bash
 
-clang aes.c -o tests_run
+echo "Enter File Name:"
+read name
+clang $name -o file_run
 if [ $? -eq 0 ]; then
     echo "run.sh --> Compiled, running program"
-    ./tests_run $1 $2 $3
+    ./file_run $1 $2 $3 $4 $5 $6
     
 else
     echo "run.sh --> Compile failed"
 
 fi
-rm tests_run
+rm file_run
