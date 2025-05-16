@@ -3,4 +3,3 @@ encrypt_code.c
 filemod.c
 run.sh
 openbuffer.c 
-.gitignore
